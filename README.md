@@ -1,4 +1,4 @@
-# lk-skills
+# lken-skills
 
 Agent skills for Claude Code and compatible agents, installable with the `skills` CLI.
 
@@ -11,8 +11,8 @@ Agent skills for Claude Code and compatible agents, installable with the `skills
 ## Install
 
 ```
-npx skills add lken-cmd/lk-skills -g -a claude-code
-npx skills add lken-cmd/lk-skills --skill orchestrate -g
+npx skills add Lken-cmd/lken-skills -g -a claude-code
+npx skills add Lken-cmd/lken-skills --skill orchestrate -g
 npx skills update
 ```
 
@@ -21,3 +21,14 @@ npx skills update
 come from Matt Pocock's [mattpocock/skills](https://github.com/mattpocock/skills)
 (`npx skills add mattpocock/skills --skill code-review -g`). `claude-usage` and `cleanup` need
 PowerShell 7 (`pwsh`).
+
+## AGENTS.md template
+
+[`templates/AGENTS.template.md`](templates/AGENTS.template.md) is the starting `AGENTS.md` for a new
+repository: generic, checkable rules only — architecture, verification, commit messages, repo
+hygiene, dependencies, and what a session leaves behind. Each project fills in the two skeletons
+(what it is, and how it is verified) and grows its own rules into the same file.
+
+```
+curl -o AGENTS.md https://raw.githubusercontent.com/Lken-cmd/lken-skills/main/templates/AGENTS.template.md
+```
