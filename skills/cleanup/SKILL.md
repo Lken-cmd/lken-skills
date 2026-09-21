@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: End-of-session cleanup for a git repository: stale branches and worktrees, scratch files, dead exclude entries, the memory and ADR indexes, and the comments this branch adds. Use when the user says "clean up" or "session end", asks whether the memory or the ADRs are still current, or before handing a branch over or closing an orchestrated run.
+description: End-of-session cleanup for a git repository, covering stale branches and worktrees, scratch files, dead exclude entries, the memory and ADR indexes, and the comments this branch adds. Use when the user says "clean up" or "session end", asks whether the memory or the ADRs are still current, or before handing a branch over or closing an orchestrated run.
 argument-hint: "[what this session created, e.g. branch names or scratch files]"
 compatibility: PowerShell 7 (pwsh) and git; gh for pull-request threads.
 ---
