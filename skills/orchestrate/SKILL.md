@@ -195,9 +195,10 @@ Leave it off the working branch — it stays in the repo root, and its history i
 
 **Never commit it to a phase branch.** To move the state to another clone, push `orchestration-state`. Tell the user the branch exists and that only they end it.
 
-End with a **resume prompt**: a fenced block the user can paste into a fresh session, and nothing
-after it. It points at the state file rather than repeating it, so it cannot go stale against the
-file it names.
+End with a **resume prompt**: a fenced block the user pastes into a fresh session **unedited**, and
+nothing after it. Anything that needs an answer from the user goes in your message *above* the
+block, never inside it: a question in the paste is a question they would be pasting to the next
+agent instead of answering.
 
 ```text
 /orchestrate <plan path or ticket>
@@ -206,12 +207,14 @@ Resuming the orchestrated run in <repo path>. ORCHESTRATION.md in the repo root 
 if it is gone, restore it with `git show orchestration-state:ORCHESTRATION.md > ORCHESTRATION.md`.
 
 Next action: <the Next action line, verbatim>
-Waiting on you: <each deferred question, one line each, or "nothing deferred">
+Read the file's Deferred questions first and put any still open to me before starting a phase.
 ```
 
-Those are the facts a fresh session cannot recover for itself: which repo the run lives in, that a
-run is in flight at all, and anything you need answered before it can continue. Everything else it
-reads from the file. Print the block whenever you stop on a gate (§ 4) or the user ends the
+Above the block, say where the run stands in a line or two and spell out each deferred question, so
+the user can answer now without opening the file. The block itself carries only what a fresh session
+cannot recover for itself: which repo the run lives in, that a run is in flight, and that the file
+may hold questions. Everything else it reads from the file, which is why the block points at it
+rather than summarising it. Print the block whenever you stop on a gate (§ 4) or the user ends the
 session, not at a per-phase pause, which keeps the same session alive.
 
 ## Context hygiene
