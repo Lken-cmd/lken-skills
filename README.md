@@ -16,12 +16,12 @@ npx skills add Lken-cmd/lken-skills --skill orchestrate -g
 npx skills update
 ```
 
-`orchestrate` invokes `/claude-usage` from this repo and `/mattpocock-skills:code-review`;
-`/mattpocock-skills:handoff` and `/mattpocock-skills:grill-with-docs` are referenced but optional.
-The three prefixed ones come from Matt Pocock's skills, installed as the `mattpocock-skills`
-plugin (`/plugin install mattpocock-skills@claude-plugins-official`) — the prefix is that plugin's,
-so adjust it if you install those skills some other way. `claude-usage` and `cleanup` need
-PowerShell 7 (`pwsh`).
+`orchestrate` invokes `/claude-usage` from this repo and `/mattpocock-skills:code-review`, and
+names `/mattpocock-skills:grill-with-docs` as where a settled plan usually comes from. Both
+prefixed skills come from Matt Pocock's, installed as the `mattpocock-skills` plugin
+(`/plugin install mattpocock-skills@claude-plugins-official`) — the prefix is that plugin's, so
+adjust it if you install them some other way. `orchestrate` writes its own handoff, so it needs no
+handoff skill. `claude-usage` and `cleanup` need PowerShell 7 (`pwsh`).
 
 ## AGENTS.md template
 

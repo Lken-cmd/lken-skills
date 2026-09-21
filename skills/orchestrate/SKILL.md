@@ -195,7 +195,24 @@ Leave it off the working branch — it stays in the repo root, and its history i
 
 **Never commit it to a phase branch.** To move the state to another clone, push `orchestration-state`. Tell the user the branch exists and that only they end it.
 
-Tell the user where things stand and what resuming will do.
+End with a **resume prompt**: a fenced block the user can paste into a fresh session, and nothing
+after it. It points at the state file rather than repeating it, so it cannot go stale against the
+file it names.
+
+```text
+/orchestrate <plan path or ticket>
+
+Resuming the orchestrated run in <repo path>. ORCHESTRATION.md in the repo root holds the state;
+if it is gone, restore it with `git show orchestration-state:ORCHESTRATION.md > ORCHESTRATION.md`.
+
+Next action: <the Next action line, verbatim>
+Waiting on you: <each deferred question, one line each, or "nothing deferred">
+```
+
+Those are the facts a fresh session cannot recover for itself: which repo the run lives in, that a
+run is in flight at all, and anything you need answered before it can continue. Everything else it
+reads from the file. Print the block whenever you stop on a gate (§ 4) or the user ends the
+session, not at a per-phase pause, which keeps the same session alive.
 
 ## Context hygiene
 
