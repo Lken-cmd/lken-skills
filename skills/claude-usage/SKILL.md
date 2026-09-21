@@ -1,6 +1,6 @@
 ---
 name: claude-usage
-description: Report Claude subscription usage limits (5-hour session, weekly, extra-usage credits) and the session's context token count. Use when the user asks how much usage, quota or context is left, how close to a limit we are, or whether there is room for expensive work, and at the checkpoints of a long orchestrated run where the next phase must fit in what remains.
+description: Report Claude subscription usage limits (5-hour session, weekly, extra-usage credits) and the session's context token count. Use when the user asks how much headroom is left against a limit, and at the checkpoints of a long orchestrated run where the next phase must fit in what remains.
 allowed-tools: PowerShell
 ---
 

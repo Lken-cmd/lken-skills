@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Drive a large, already-designed feature to completion as an orchestrator — delegate each phase to a fresh subagent, review the result with /code-review, fix the findings, then checkpoint usage and context before starting the next. Use when the work is too big for one session and the design is already settled.
+description: Drive an already-designed feature to completion one delegated phase at a time, across as many sessions as it takes.
 argument-hint: "[path, ticket, or plan for the settled design] [--review-at-end]"
 disable-model-invocation: true
 ---
@@ -11,7 +11,7 @@ You are the **orchestrator**: you hold the plan, delegate each phase to a fresh 
 
 ## Execute, don't design
 
-The design arrived settled — usually from a `/grill-with-docs` session, sometimes as a spec on the issue tracker or a plan file. Every decision in it was already put to the user and answered. Do not re-open those decisions, and do not make new ones on their behalf.
+The design arrived settled — usually from a `/mattpocock-skills:grill-with-docs` session, sometimes as a spec on the issue tracker or a plan file. Every decision in it was already put to the user and answered. Do not re-open those decisions, and do not make new ones on their behalf.
 
 When a genuine design question surfaces mid-run — the plan is silent on something and the answers differ materially — that is a **pause and ask**, not a judgement call. Grilling is where decisions get made; the orchestrator's job is to notice the gap, record it in the state file, and put it to the user. Mechanical choices inside a settled design (naming, file placement, which existing helper to reuse) are yours and the subagent's to make.
 
@@ -25,23 +25,13 @@ If nothing is found, stop and ask. Do not start a run against a design you infer
 
 ### Resume instead, if there's a run in flight
 
-If `ORCHESTRATION.md` already exists in the repo root, this is a resumed run. Read it, restate the **Next action** and the run contract back to the user, and pick up there — skip the rest of intake. Only re-ask the contract if the user says the terms have changed.
-
-If the file is gone but the state branch exists (`git rev-parse -q --verify orchestration-state`), the run is still in flight: restore the file with `git show orchestration-state:ORCHESTRATION.md > ORCHESTRATION.md`, re-add the exclude entry (it is local to the clone and does not travel with the branch), and resume. When both exist and differ, the working file is the newer one; its last edit simply was not committed yet.
-
-**A resumed run may have died mid-phase**, so trust git over the file before acting. If any phase's status is `dispatched`, `built`, or `fixing`, the previous session was interrupted partway: check that branch with `git log <base>..<branch> --oneline` and `git status --short` to see what actually landed. Three cases, and they need different handling:
-
-- **Commits present, status `dispatched`** — the subagent worked and the session died before recording it. Don't re-dispatch; go to the review step.
-- **Nothing committed, status `dispatched`** — the subagent died early or never started. Re-dispatch, after confirming the working tree is clean.
-- **Uncommitted changes on the branch** — partial work from a subagent that never finished. Show the user `git status --short` and ask whether to commit it as the phase's starting point or discard it. Don't decide this one yourself; it's their work at stake.
-
-Re-dispatching over a branch that already has commits is the failure this check exists to prevent — it produces duplicated or conflicting work that the review then has to untangle.
+`ORCHESTRATION.md` in the repo root, or an `orchestration-state` branch, means this is a resumed run: follow [`RESUMING.md`](RESUMING.md) and skip the rest of intake. It covers restoring the state file and reading git for what the dead session actually landed — a resumed run may have died mid-phase, and re-dispatching over a branch that already has commits is the failure that check exists to prevent.
 
 ### Cut the plan into phases
 
 A phase is one subagent's worth of work that ends in a committed, reviewable, coherent change. If the plan already delineates phases, use its boundaries. If it doesn't, propose a split — this is slicing an agreed design, not designing.
 
-Each phase needs **acceptance criteria written down** before it starts. This isn't ceremony: `/code-review`'s Spec axis diffs the work against a spec, and with no per-phase spec it reports "no spec available" and you get half a review, every phase. Two or three concrete assertions per phase is enough.
+Each phase needs **acceptance criteria written down** before it starts. This isn't ceremony: `/mattpocock-skills:code-review`'s Spec axis diffs the work against a spec, and with no per-phase spec it reports "no spec available" and you get half a review, every phase. Two or three concrete assertions per phase is enough.
 
 Mark each phase's **dependencies** on earlier phases. Most will be linear. Note the ones that genuinely aren't.
 
@@ -51,21 +41,21 @@ Put the phase table to the user and get agreement before phase 1.
 
 Ask these together, in one message:
 
-1. **How many subagents may run at once?** Default **1**. This is the lever against the 5-hour limit — concurrency multiplies burn rate against a shared quota. Only raise it if the phase table has genuinely independent phases *and* the user has quota headroom.
+1. **How many subagents may run at once?** Default **1**. This is the lever against the 5-hour limit — concurrency multiplies burn rate against a shared quota. Only raise it if the phase table has genuinely independent phases *and* the user has quota headroom; above 1, [`PARALLEL.md`](PARALLEL.md) holds the two constraints that then bind — parallel phases cannot be stacked, and their subagents need worktree isolation.
 2. **Which model tier for building, and which for reviewing?** Default **Opus for both**. Offer Sonnet for the build tier as the cheaper option: implementation against a settled plan with written acceptance criteria is well-specified work, and it's where the volume is. Recommend keeping review on Opus whichever they pick — a missed finding propagates up the whole stack.
 3. **Create a PR after each phase, or one at the end?**
 4. **Pause after each phase so the user can look, or run to the end?**
-5. **Code review after each phase, or one review at the end?** Default **per phase**: a finding in phase 1 is cheapest to fix before phases 2 to 5 build on it. Review at the end runs `/code-review` once over the whole stack, which saves the two review agents per phase and suits short stacks of small phases. Its cost is that every finding lands after all the code exists, so fixes ripple through the stack. Pair it with PRs at the end; per-phase PRs with an at-end review would need each fix rebased into the phase branch that owns the code.
+5. **Code review after each phase, or one review at the end?** Default **per phase**: a finding in phase 1 is cheapest to fix before phases 2 to 5 build on it. Review at the end runs the review once over the whole stack, which saves the two review agents per phase and suits short stacks of small phases. Its cost is that every finding lands after all the code exists, so fixes ripple through the stack. Pair it with PRs at the end; per-phase PRs with an at-end review would need each fix rebased into the phase branch that owns the code. Everything that changes when review defers is under *Review at the end* (§ 3).
 
 A term the user passed as an argument (`--review-at-end`) counts as answered; ask only the rest.
 
-Subagents inherit the session model unless told otherwise, so a phase on the default runs three Opus agents — one implementation, plus `/code-review`'s two — before any fix rounds. That's why this is a contract term and not an afterthought.
+**Name the tier on every spawn.** An omitted `model` silently inherits yours, which defeats the term — and that holds for the build agent and for the review's two axis agents alike. A phase left on the default runs three Opus agents before any fix rounds, which is why this is a contract term and not an afterthought.
 
 Then take a **baseline `/claude-usage`** before phase 1 and record it. The baseline is what makes the per-phase burn rate measurable, and the burn rate is what lets you predict that phase 5 won't fit *before* you start it rather than after.
 
 ## 2. The state file
 
-`ORCHESTRATION.md` in the repo root, excluded via the repo's **`info/exclude`** — not `.gitignore`. Editing the tracked `.gitignore` would show up in every phase diff and `/code-review` would rightly flag it. Append to the file `git rev-parse --git-path info/exclude` names, not to a literal `.git/info/exclude`: in a worktree `.git` is a file, and the exclude list lives in the main repository where every worktree shares it.
+`ORCHESTRATION.md` in the repo root, excluded via the repo's **`info/exclude`** — not `.gitignore`. Editing the tracked `.gitignore` would show up in every phase diff and `/mattpocock-skills:code-review` would rightly flag it. Append to the file `git rev-parse --git-path info/exclude` names, not to a literal `.git/info/exclude`: in a worktree `.git` is a file, and the exclude list lives in the main repository where every worktree shares it.
 
 **Write it atomically.** Temp file then `os.replace`/`mv`, or a targeted edit. **Never a truncating open** (`open(p,"w")`, `>`, `Set-Content`) — the truncation lands even when the write then fails. Prefer targeted edits to whole-file rewrites.
 
@@ -75,7 +65,7 @@ Then take a **baseline `/claude-usage`** before phase 1 and record it. The basel
 blob=$(git hash-object -w ORCHESTRATION.md)
 export GIT_INDEX_FILE=$(git rev-parse --git-path orchestration.index)
 git update-index --add --cacheinfo "100644,$blob,ORCHESTRATION.md"
-tree=$(git write-tree); unset GIT_INDEX_FILE
+tree=$(git write-tree); rm -f "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE
 parent=$(git rev-parse -q --verify orchestration-state || true)   # `|| true`: empty on the first run
 commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "orchestration: <what changed>")
 git update-ref refs/heads/orchestration-state "$commit"
@@ -125,7 +115,7 @@ Review: <per-phase | at end>   Context pause threshold: 55%
 <the single next thing a fresh agent should do>
 ```
 
-Follow `/handoff`'s discipline here: reference specs, ADRs, and commits by path or URL rather than restating them, and redact anything sensitive. Because this file carries the whole run, invoking `/handoff` on top of it is usually redundant.
+Reference specs, ADRs, and commits by path or URL rather than restating them, and redact anything sensitive. Because this file already carries the whole run, a separate handoff document on top of it is usually redundant.
 
 ### When to write
 
@@ -137,8 +127,6 @@ You can only write while you hold the turn, and during a long subagent run you d
 4. **When the review comes back** — findings recorded before you start fixing, status `reviewed`. Review output is expensive to regenerate; losing it means paying for the review twice.
 5. **After each fix round** — what got fixed, what you skipped and why, status `fixing` until it settles.
 6. **At phase end** — status `done`, PR link, usage row, and a fresh **Next action**.
-
-With review at the end, checkpoints 4 and 5 happen once, after the last phase, and each phase goes from checkpoint 3 straight to 6.
 
 Keep **Next action** current at every one of these, not just at phase end. It's the first thing a resumed session reads, and it's worthless if it describes a step you finished twenty minutes ago.
 
@@ -152,7 +140,7 @@ Each step below ends with a state-file write — checkpoints 2 to 6 of *When to 
 
 **Branch.** Stacked onto `main`: phase 1 branches off `main`, phase N branches off phase N-1's branch. Record the base — you need it twice, for the review fixed point and for the PR target.
 
-**Delegate.** Fill in **In flight** and set the status to `dispatched` *first* — then spawn. Spawn a **fresh `general-purpose` subagent** per phase, at the contract's **build tier** (pass `model` explicitly — omitting it silently inherits your own model, which defeats the term). `general-purpose` is the right type because it has full tool access and can actually write and run things; `Explore` and `Plan` are read-only and can't implement.
+**Delegate.** Fill in **In flight** and set the status to `dispatched` *first* — then spawn. Spawn a **fresh `general-purpose` subagent** per phase, at the contract's **build tier**. `general-purpose` is the right type because it has full tool access and can actually write and run things; `Explore` and `Plan` are read-only and can't implement.
 
 Never reuse a subagent across phases: a reused agent carries the previous phase's context as noise, and its own window is a resource too. Give it:
 
@@ -165,9 +153,9 @@ Never reuse a subagent across phases: a reused agent carries the previous phase'
 
 When it returns, record the SHA, deviations, and open questions before doing anything else — including before starting the review. That report is unrecoverable if the session ends here.
 
-**Review**, when the contract reviews per phase. With review at the end, skip Review and Triage: the phase is `done` once its commit is recorded, and the run continues with PR and Checkpoint. Otherwise run `/code-review` with the phase's **base branch as the fixed point** and the phase's acceptance criteria as the spec. Its two axis sub-agents also inherit by default, so when the review tier differs from your own model, set it on both of those spawns. This is exactly the right fixed point for a stack: `git diff <base>...HEAD` isolates this phase's changes from everything beneath it.
+**Review**, when the contract reviews per phase — for the other branch see *Review at the end* below. Run `/mattpocock-skills:code-review` with the phase's **base branch as the fixed point** and the phase's acceptance criteria as the spec. Set the **review tier** on both of its axis sub-agents. This is exactly the right fixed point for a stack: `git diff <base>...HEAD` isolates this phase's changes from everything beneath it.
 
-The subagent must have committed for this to work at all — `/code-review` compares against `HEAD`, so uncommitted work yields an empty diff and the review fails at its own first step. If the subagent returned without committing, commit its work yourself before reviewing.
+The subagent must have committed for this to work at all — `/mattpocock-skills:code-review` compares against `HEAD`, so uncommitted work yields an empty diff and the review fails at its own first step. If the subagent returned without committing, commit its work yourself before reviewing.
 
 **Triage.** Record the findings before you start fixing any of them. Documented-standard violations get fixed. Baseline smells are judgement calls — decide each, and record the ones you skip *with the reason* in the state file; an unexplained skip is indistinguishable from an oversight to the next session. Fixes land as follow-up commits on the phase branch. If the fix set is large, delegate it to a fresh subagent at the **build tier** rather than doing it yourself — that's an implementation task, and implementation belongs out of your context.
 
@@ -175,13 +163,15 @@ Re-review only if the fixes were substantial enough to plausibly introduce new f
 
 **PR**, if the contract says per-phase: `gh pr create --base <the phase's base branch>`. The PR body states its position in the stack and links the phase's acceptance criteria. When a PR low in the stack merges, retarget the one directly above it.
 
-**Checkpoint.** Run `/claude-usage` and append a row. Once per phase boundary — the limits endpoint rate-limits aggressively, so don't poll it.
+**Checkpoint.** Run `/claude-usage` and append a row. Once per phase boundary; the limits endpoint rate-limits aggressively.
 
 **Then evaluate the gates below**, and pause or continue per the contract.
 
 ### Review at the end
 
-When the contract defers review, the last phase does not end the run. Run `/code-review` once with the run's **base branch as the fixed point** and every phase's acceptance criteria, concatenated, as the spec, then triage exactly as above. Fixes land as follow-up commits on the top branch of the stack, delegated at the build tier when the set is large. Record the findings under **Final review** before fixing any of them. The two-round convergence limit still applies: a stack that does not converge has a wrong phase brief somewhere, and the phase table says which phase owns the code the findings cluster in.
+When the contract defers review, three things change. Each phase skips the Review and Triage steps: it is `done` once its commit is recorded, and goes on to PR and Checkpoint. Checkpoints 4 and 5 of *When to write* happen once rather than per phase. And the last phase does not end the run.
+
+Run `/mattpocock-skills:code-review` once with the run's **base branch as the fixed point** and every phase's acceptance criteria, concatenated, as the spec, then triage exactly as above. Fixes land as follow-up commits on the top branch of the stack, delegated at the build tier when the set is large. Record the findings under **Final review** before fixing any of them. The two-round convergence limit still applies: a stack that does not converge has a wrong phase brief somewhere, and the phase table says which phase owns the code the findings cluster in.
 
 The review and its fix rounds cost about one phase. Check the gates before starting it and hand off rather than begin a review that cannot finish; a resumed session picks it up from **Next action** like any phase.
 
@@ -207,21 +197,11 @@ Leave it off the working branch — it stays in the repo root, and its history i
 
 Tell the user where things stand and what resuming will do.
 
-## Running phases in parallel
-
-Only when the contract's concurrency is above 1 *and* the phases are genuinely independent. Two constraints are not negotiable:
-
-**A stack is linear, so parallel phases cannot be stacked.** Independent phases branch off the *same* base and each PR into that base — a diamond, not a stack. The next stacked phase bases off whichever of them lands last. If the user wants both a strict stack and parallelism, the stack wins; say so and run those phases sequentially.
-
-**Parallel subagents need `isolation: "worktree"`.** Two agents editing one working tree will clobber each other's edits and produce a diff neither of them intended. Worktree isolation costs setup time and disk; running parallel phases without it costs the phases.
-
-Review each parallel phase against its own base independently. Don't batch the reviews — a phase that's ready should get reviewed while its sibling is still building.
-
 ## Context hygiene
 
-The failure mode of this skill is an orchestrator that gradually turns into an implementer and runs out of window at phase 3. Guard against it:
+The failure mode of this skill is an orchestrator that gradually turns into an implementer and runs out of window at phase 3. Four habits hold the line:
 
-- Don't read implementation files. If you need to know what's in one, that's a question for a subagent.
-- Don't pull raw diffs into your context. `--stat` if you need shape; the review reports are your view of the content.
-- Don't paste subagent or review output verbatim into the state file. Gist it — outcomes and decisions, not transcripts.
-- Don't write code yourself, including "quick" fixes. Delegate, or do it knowing you spent window on it.
+- What's in a file is a question for a subagent; ask it and keep the answer.
+- `--stat` gives you the shape of a diff. The review reports are your view of its content.
+- Gist what a subagent or a review returns into the state file: outcomes and decisions, not transcripts.
+- Every edit goes to a subagent, quick fixes included — or you make it knowing you spent window on it.

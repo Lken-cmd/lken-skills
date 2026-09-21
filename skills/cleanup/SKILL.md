@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: End-of-session cleanup for a git repository. Surveys stale git artifacts (merged branches, worktrees, scratch and handoff files, dead exclude entries, stray tags), the agent's memory index, an ADR index when the repo keeps one, and the comments and text the current branch adds, then deletes what is provably obsolete, asks about the rest and reports both. Use when the user says "clean up", "tidy up", "session end", "prune branches", "remove stale files", "check the memory", "are the ADRs current", or before handing a branch over or closing a long orchestrated run.
+description: End-of-session cleanup for a git repository: stale branches and worktrees, scratch files, dead exclude entries, the memory and ADR indexes, and the comments this branch adds. Use when the user says "clean up" or "session end", asks whether the memory or the ADRs are still current, or before handing a branch over or closing an orchestrated run.
 argument-hint: "[what this session created, e.g. branch names or scratch files]"
 compatibility: PowerShell 7 (pwsh) and git; gh for pull-request threads.
 ---
@@ -52,7 +52,9 @@ own creations; the script cannot know who created a file.
 - **Scratch files.** Root-level `*.scratch.md`, `ORCHESTRATION*.md`, `HANDOFF*.md`, decision and
   checkpoint notes: cleaned when this session wrote them or the run they belong to is verified
   finished, otherwise candidates. An `orchestration-state` branch goes only when the user confirms
-  its run is finished.
+  its run is finished. An orchestrated run also leaves a throwaway index at
+  `git rev-parse --git-path orchestration.index`; delete it once the run is finished, and leave
+  it alone while one is in flight.
 - **Exclude entries.** Plain-path lines in `info/exclude` whose path no longer exists are cleaned.
   Globs and directories stay.
 - **Temp output.** Run output in the session scratchpad is cleaned without asking; it is yours.
