@@ -26,17 +26,39 @@ directories, because a shell launched by the desktop app does not always resolve
 '~' to the profile holding the credentials. Candidates are ordered by account
 match before any is read for a token.
 
-HOST-MANAGED AUTH. A session the desktop app or the Agent SDK starts does not
-authenticate from disk at all: the host holds the token in memory and hands it
-over IPC (CLAUDE_CODE_MESSAGING_SOCKET, CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH).
-No file, no environment variable, nothing this script can read. Any
-.credentials.json it does find then belongs to whoever last used the CLI, which
-need not be this session's account - and because such transcripts carry no owner
-stamp, the account check above has nothing to compare and waves it through. That
+HOST-MANAGED AUTH, AND WHY A PINNED TOKEN IS THE ANSWER. A session the desktop
+app, the VS Code extension or the Agent SDK starts does not authenticate from
+disk at all: the host holds the token in memory and hands it over IPC
+(CLAUDE_CODE_MESSAGING_SOCKET, CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH). No file,
+no environment variable, nothing this script can read. Any .credentials.json it
+does find then belongs to whoever last used the CLI, which need not be this
+session's account - and because such transcripts carry no owner stamp, the
+account check above has nothing to compare and waves it through. That
 combination is how a reading of the wrong subscription gets reported as the
-session's own. So it is refused instead: under host-managed auth, only
-CLAUDE_CODE_OAUTH_TOKEN is trusted, and a stored token is used only when the
-caller passes -UseStoredToken and accepts the label that comes with it.
+session's own, so it is refused rather than guessed at.
+
+Chasing the host's own token is a dead end, and every route was tried: it is in
+no credentials file, no environment variable and no local cache. The statusLine
+payload does carry rate_limits and the true context window, but a status line is
+a terminal footer and the GUI surfaces never run the command - measured
+2026-09-21 with refreshInterval 2: zero invocations in the VS Code extension
+across two restarts, zero in the desktop app, while the same script registered
+as a PostToolUse hook fired at once. Do not re-investigate it.
+
+What is recoverable is not the token but the ACCOUNT, and that is enough: the
+stored login is safe to read as soon as it is known to be the same account the
+session runs as. A desktop-app session names its own account in its cwd -
+...\Claude\scratch-workspaces\<accountUuid>\<organizationUuid>\scratch-... - so
+that case resolves itself with nothing to configure. A session that leaves no
+such signal, an editor extension or an SDK harness, is still refused rather than
+guessed at.
+
+For that remaining case only, CLAUDE_USAGE_OAUTH_TOKEN is honoured: minted by
+'claude setup-token' and set as a persistent user variable, it is inherited by
+every surface's spawned processes. Deliberately NOT CLAUDE_CODE_OAUTH_TOKEN,
+which is an authentication source for Claude Code itself and would move every
+session onto its account; this one is read here and nowhere else. Optional - the
+terminal and the desktop app need none of it.
 
 The token count is reported as-is. A percentage is emitted only when the window
 is known, and the window it used is always echoed back in context_window with
@@ -69,7 +91,8 @@ number - an orchestrated run budgeting against the wrong subscription, say.
 Under host-managed auth, fall back to a stored .credentials.json token even
 though it cannot be tied to this session. The reading is labelled with the
 account it actually belongs to. Use it to inspect that account deliberately, not
-to get a number out of a session whose own limits are unreachable.
+to get a number out of a session whose own limits are unreachable - pinning
+CLAUDE_USAGE_OAUTH_TOKEN is the fix for that.
 
 .EXAMPLE
 # 1M-window session: pass the real window, or the percentage is meaningless.
@@ -78,6 +101,12 @@ to get a number out of a session whose own limits are unreachable.
 .EXAMPLE
 # Deliberately read the stored CLI login's subscription from an app session.
 ./Get-ClaudeUsage.ps1 -UseStoredToken
+
+.EXAMPLE
+# One-time setup that makes the limits readable on every surface, GUI included.
+#   claude setup-token
+#   setx CLAUDE_USAGE_OAUTH_TOKEN "<token>"   # then restart the app or editor
+# Nothing in Claude Code reads that variable, so it changes no session's account.
 #>
 [CmdletBinding()]
 param(
@@ -97,6 +126,7 @@ $out = [ordered]@{
     account_mismatch        = $null
     auth_source             = $null
     auth_mode               = $null
+    credentials_file        = $null
     session_context_tokens  = $null
     session_context_percent = $null
     context_window          = $null
@@ -242,6 +272,36 @@ function Find-SessionOwner([string]$path) {
     return $null
 }
 
+# The desktop app leaves no owner stamp and its token never touches disk, so the
+# account check had nothing to compare and the reading was refused. It does leave
+# one signal: it runs each session in a scratch workspace whose own path names the
+# account and organization it is signed in as.
+#   ...\Claude\scratch-workspaces\<accountUuid>\<organizationUuid>\scratch-<date>-<id>
+# Reading that turns the app case from "cannot tell whose limits these would be"
+# into a decidable comparison against the stored login, with nothing for the user
+# to mint or configure. The layout is undocumented, so match it strictly: a change
+# to it makes this return null, which falls back to the refusal rather than to a
+# guess. Measured on 2026-09-21; the uuids matched the credentials file exactly.
+function Get-AccountFromWorkspacePath([string]$cwd) {
+    if (-not $cwd) { return $null }
+    $u = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+    if ($cwd -match "[\\/]scratch-workspaces[\\/]($u)[\\/]($u)(?:[\\/]|$)") {
+        return [ordered]@{ email = $null; account_uuid = $Matches[1]; organization_uuid = $Matches[2] }
+    }
+    return $null
+}
+
+# cwd is stamped on most entries, so the head of the file is enough and keeps this
+# cheap on a transcript that may be very long.
+function Find-SessionCwd([string]$path) {
+    foreach ($line in (Get-Content $path -TotalCount 200)) {
+        if ($line -notlike '*"cwd"*') { continue }
+        try { $o = $line | ConvertFrom-Json } catch { continue }
+        if ($o.cwd) { return $o.cwd }
+    }
+    return $null
+}
+
 $sessionOwner = $null
 $transcript = $null
 
@@ -264,7 +324,12 @@ else {
         # not - one turn writes several lines, and skipped entries add up.
         $u = Find-LatestUsage (Get-Content $transcript.FullName -Tail 400)
         if ($null -eq $u) { $u = Find-LatestUsage (Get-Content $transcript.FullName) }
+        # Owner stamp first - it is explicit. The workspace path is the fallback
+        # that makes desktop-app sessions decidable at all.
         $sessionOwner = Find-SessionOwner $transcript.FullName
+        if (-not $sessionOwner) {
+            $sessionOwner = Get-AccountFromWorkspacePath (Find-SessionCwd $transcript.FullName)
+        }
         if ($null -eq $u) {
             $out.context_error = "no assistant message with usage yet in session $id"
         }
@@ -316,14 +381,35 @@ $out.config_dir = @($orderedDirs | Where-Object {
 # Each returns @{ token; source; expires; account } or $null.
 
 function Get-TokenFromEnv {
-    # `claude setup-token` mints one of these for headless sessions and for
-    # desktop-spawned ones that never wrote a credentials file. It is also the
-    # right way to pin one account per session on a multi-account machine -
-    # but nothing local names its owner, so it cannot be account-checked.
+    # The pinned token comes first. It is this script's own: Claude Code does not
+    # read CLAUDE_USAGE_OAUTH_TOKEN, so it can be set machine-wide - which is what
+    # makes a GUI surface work - without moving any session onto its account.
+    if ($env:CLAUDE_USAGE_OAUTH_TOKEN) {
+        return @{ token = $env:CLAUDE_USAGE_OAUTH_TOKEN; source = 'env:CLAUDE_USAGE_OAUTH_TOKEN'; expires = $null; account = $null; pinned = $true }
+    }
+    # Honoured second, for a machine that already has one set for CI. Not the
+    # variable to recommend: Claude Code authenticates with it too.
     if ($env:CLAUDE_CODE_OAUTH_TOKEN) {
-        return @{ token = $env:CLAUDE_CODE_OAUTH_TOKEN; source = 'env:CLAUDE_CODE_OAUTH_TOKEN'; expires = $null; account = $null }
+        return @{ token = $env:CLAUDE_CODE_OAUTH_TOKEN; source = 'env:CLAUDE_CODE_OAUTH_TOKEN'; expires = $null; account = $null; pinned = $false }
     }
     return $null
+}
+
+# The one-time setup, stated exactly, because this text is the entire answer when
+# a session can read no token. The obvious advice - export CLAUDE_CODE_OAUTH_TOKEN
+# - is wrong twice over: a shell export never reaches a GUI app's environment, and
+# that variable also authenticates Claude Code itself.
+function Get-SetupHelp {
+    $mint = "run 'claude setup-token' in a terminal, logged in as the account you want measured, and copy the token it prints (it is saved nowhere)"
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        return "$mint. Then set it as a persistent user variable: setx CLAUDE_USAGE_OAUTH_TOKEN ""<token>"". Restart the app or editor afterwards - a process reads the user environment only at launch."
+    }
+    if ($IsMacOS) {
+        # A GUI app on macOS is launched by launchd, not by a shell, so a profile
+        # export reaches the terminal only.
+        return "$mint. For terminal sessions add 'export CLAUDE_USAGE_OAUTH_TOKEN=<token>' to your shell profile; for the desktop app also run 'launchctl setenv CLAUDE_USAGE_OAUTH_TOKEN <token>' and restart it, since a GUI app is launched by launchd and never reads your profile."
+    }
+    return "$mint. Then add 'export CLAUDE_USAGE_OAUTH_TOKEN=<token>' to your shell profile, and to your desktop session's environment (~/.config/environment.d/ or similar) if you use a GUI surface. Restart it afterwards."
 }
 
 function Get-TokenFromFile([string[]]$dirs) {
@@ -380,6 +466,17 @@ function Get-TokenFromHelper([string[]]$dirs) {
 $hostAuth = Test-HostManagedAuth
 $out.auth_mode = if ($hostAuth) { 'host-managed' } else { 'local' }
 
+# Whether a stored login exists at all, reported as its own field and separately
+# from whether one was usable. A machine driven only through the desktop app or
+# the extension can reach here having never written this file - both keep their
+# credential in their own process - and then there is nothing to read rather than
+# something being wrong. Saying which of the two it is turns "the skill is broken"
+# into "this machine has no readable login", which is a different instruction to
+# the reader and the only one of the two they can act on.
+$out.credentials_file = @($configDirs | ForEach-Object { Join-Path $_ '.credentials.json' } |
+    Where-Object { Test-Path $_ }) | Select-Object -First 1
+$noCredentialsFile = -not $out.credentials_file
+
 $auth = Get-TokenFromEnv
 $fromEnv = [bool]$auth
 if (-not $auth) { $auth = Get-TokenFromFile $orderedDirs }
@@ -394,34 +491,65 @@ $blocked = $false
 # unreadable, and whatever sits on disk is some other login's with no owner stamp
 # to disprove it. Refusing is the whole point - waving this case through is what
 # reported one account's subscription as another's.
-if ($hostAuth -and -not $fromEnv -and $auth -and -not $UseStoredToken) {
+# The refusal exists because a host-managed session could not be tied to any
+# account, so a stored token might silently be a different subscription's. When
+# the session's account IS known - an owner stamp, or the desktop app's workspace
+# path - and it matches the stored login, that doubt is gone and refusing would
+# withhold a reading that is provably correct.
+$ownerVerified = $sessionOwner -and $auth -and (Test-SameAccount $auth.account $sessionOwner)
+
+# Only -RequireAccountMatch refuses now. Refusing by default was an overcorrection:
+# it turned "cannot prove whose these are" into no reading at all, which silently
+# broke every editor-extension session once Claude Code moved those to host-managed
+# auth - the one surface where nothing on disk names the account. Unverifiable is
+# not the same as wrong, and the guard that matters is naming the account beside the
+# numbers so a wrong one is visible and can be rejected. Where a wrong number is
+# worse than none, -RequireAccountMatch still refuses outright.
+if ($RequireAccountMatch -and $auth -and -not $ownerVerified -and -not $UseStoredToken) {
     $blocked = $true
     $out.account = $auth.account
     $whose = Format-Account $auth.account
-    $out.account_mismatch = "this session authenticates through its host (auth_mode=host-managed), so its token is unreadable here and its limits cannot be fetched. The only token on disk belongs to $whose, which need not be this session's account, so it was not used. To get a correct reading: log the CLI in as the account you want measured ('claude auth login', then pass -UseStoredToken), or run 'claude setup-token' for it and export CLAUDE_CODE_OAUTH_TOKEN. Pass -UseStoredToken as-is to read $whose deliberately."
+    $out.account_mismatch = "unverifiable, and -RequireAccountMatch was passed, so no limits were fetched. This session leaves no account signal - host-managed auth keeps its own token in the host, and only a desktop-app session names its account in its workspace path - so the stored login ($whose) could not be shown to be the same account. Drop -RequireAccountMatch to read it labelled, or $(Get-SetupHelp)"
     $out.limits_error = $out.account_mismatch
 }
 
 if ($auth -and -not $blocked) {
     $out.account = $auth.account
-    if ($hostAuth -and -not $fromEnv) {
-        # Only reachable via -UseStoredToken. Name the owner without hedging.
-        $out.account_mismatch = "host-managed session: the limits below belong to $(Format-Account $auth.account), the stored CLI login, read because -UseStoredToken was passed. They are NOT this session's."
-    }
-    elseif ($auth.source -eq 'env:CLAUDE_CODE_OAUTH_TOKEN' -and $sessionOwner) {
-        $out.account_mismatch = 'unverifiable: CLAUDE_CODE_OAUTH_TOKEN names no account, so the limits below cannot be tied to this session. Trust them only if that token was set for this session.'
+    if ($ownerVerified) {
+        # Nothing to flag: the session's own account and the token's are the same
+        # account, so null carries its documented meaning. Worth naming as its own
+        # branch because a host-managed session reaching this point is exactly the
+        # case that used to be refused for being undecidable.
+        $out.account_mismatch = $null
     }
     elseif ($sessionOwner -and $auth.account -and -not (Test-SameAccount $auth.account $sessionOwner)) {
+        # A KNOWN, DIFFERENT account. This must be tested before any of the
+        # host-managed branches below, which describe the account as merely
+        # unknown: a desktop-app session is host-managed AND names its account, so
+        # ordering these the other way around reports the one case we can actually
+        # prove wrong as if it were only unproven - the softest possible wording
+        # for the loudest possible finding.
         $who = "the only token available belongs to $(Format-Account $auth.account), but this session runs as $(Format-Account $sessionOwner)"
-        $fix = "Log in as the session's account, or set CLAUDE_CODE_OAUTH_TOKEN for it."
-        if ($RequireAccountMatch) {
-            $blocked = $true
-            $out.account_mismatch = "$who. Limits were not fetched (-RequireAccountMatch). $fix"
-            $out.limits_error = $out.account_mismatch
-        }
-        else {
-            $out.account_mismatch = "$who. The limits below are the WRONG subscription's. $fix"
-        }
+        $out.account_mismatch = "$who. The limits below are the WRONG subscription's - do not report them as this session's. Log in as the session's account, or set CLAUDE_USAGE_OAUTH_TOKEN for it."
+    }
+    elseif ($hostAuth -and -not $fromEnv -and $UseStoredToken) {
+        # The deliberate override: the caller asked for this account by name.
+        $out.account_mismatch = "host-managed session: the limits below belong to $(Format-Account $auth.account), the stored CLI login, read because -UseStoredToken was passed. They are NOT provably this session's."
+    }
+    elseif ($hostAuth -and -not $fromEnv) {
+        # The editor-extension and SDK case. The numbers are reported rather than
+        # refused, so the label carries the whole warning: name the account, say
+        # plainly that it is not proven, and say what would prove it.
+        $out.account_mismatch = "unverified: this session is host-managed and names its account nowhere on disk, so the limits below cannot be tied to it. They are $(Format-Account $auth.account)'s - the CLI's login, which is the only thing that writes .credentials.json, and therefore a different lineage from whatever this session signed into. The same account on a single-account machine; wrong without warning on a machine with two. Check the account is the one you meant before acting on the numbers. To remove the doubt: $(Get-SetupHelp) Or pass -RequireAccountMatch to refuse rather than report when it cannot be proven."
+    }
+    elseif ($auth.pinned) {
+        # The intended path. Nothing local names the account behind a minted
+        # token, but it was minted for one on purpose, so this is a note about
+        # which subscription is being measured - not a warning about the reading.
+        $out.account_mismatch = 'pinned: these are the limits of whichever account CLAUDE_USAGE_OAUTH_TOKEN was minted for. Nothing local names it, so confirm once that it is the subscription you meant; after that it is the same account on every surface.'
+    }
+    elseif ($auth.source -eq 'env:CLAUDE_CODE_OAUTH_TOKEN') {
+        $out.account_mismatch = 'unverifiable: CLAUDE_CODE_OAUTH_TOKEN names no account, and it is also an authentication source for Claude Code itself, so it may have been set for something other than usage reporting. Set CLAUDE_USAGE_OAUTH_TOKEN to pin the account measured here instead.'
     }
     elseif ($sessionOwner -and -not $auth.account) {
         $out.account_mismatch = 'unverifiable: no .claude.json names the account behind this token, so it cannot be matched against the session.'
@@ -430,7 +558,7 @@ if ($auth -and -not $blocked) {
         # The common case: most transcripts carry no owner stamp. Say so, and
         # name the account anyway - a labelled number the reader can reject
         # beats an unlabelled one they cannot.
-        $out.account_mismatch = "unverifiable: this session's transcript carries no owner stamp, so the token cannot be matched against it. The limits below are $(Format-Account $auth.account)'s - check that is the account you meant. Exporting CLAUDE_CODE_OAUTH_TOKEN for the account you want measured removes the doubt."
+        $out.account_mismatch = "unverifiable: this session's transcript carries no owner stamp, so the token cannot be matched against it. The limits below are $(Format-Account $auth.account)'s - check that is the account you meant. Setting CLAUDE_USAGE_OAUTH_TOKEN for the account you want measured removes the doubt."
     }
 }
 
@@ -446,11 +574,15 @@ if (-not $auth) {
         try { $thirdParty = ([Uri]$env:ANTHROPIC_BASE_URL).Host -notmatch '(^|\.)anthropic\.com$' } catch { $thirdParty = $true }
     }
     $out.limits_error = if ($env:ANTHROPIC_API_KEY -or $env:ANTHROPIC_AUTH_TOKEN -or $thirdParty) {
-        'API-key or third-party-provider auth: no subscription limits exist for it. Set CLAUDE_CODE_OAUTH_TOKEN from "claude setup-token" to read a subscription.'
+        "API-key or third-party-provider auth: no subscription limits exist for it, because a key has no subscription. To read one anyway, $(Get-SetupHelp)"
+    } elseif ($noCredentialsFile) {
+        # The distinct, actionable state: nothing to read, as opposed to something
+        # read and rejected. Lead with it so it is not mistaken for a malfunction.
+        "NO STORED LOGIN ON THIS MACHINE: no .credentials.json exists under [$searched], and no token is set in the environment, so there is no subscription for this script to query. Nothing is broken - the desktop app and the editor extension each keep their login inside their own process and never write this file, so a machine used only through them has none. Context size below is unaffected and still accurate. To make limits readable, either sign in once from a terminal ('claude' and /login), which writes the file every surface can then share, or $(Get-SetupHelp)"
     } elseif ($hostAuth) {
-        "host-managed auth (auth_mode=host-managed) and no readable token: this session's credentials live in its host, and no credentials file was found under [$searched] either. Run 'claude setup-token' as the account you want measured and export CLAUDE_CODE_OAUTH_TOKEN."
+        "host-managed auth (auth_mode=host-managed) and no usable token: this session's credentials live in its host - the desktop app, the editor extension or an SDK harness - and the stored login under [$searched] could not be used. $(Get-SetupHelp)"
     } else {
-        "no OAuth token. Searched CLAUDE_CODE_OAUTH_TOKEN, .credentials.json under [$searched], the macOS keychain and apiKeyHelper. Run 'claude setup-token' and set CLAUDE_CODE_OAUTH_TOKEN in the environment this session runs with."
+        "no OAuth token. Searched CLAUDE_USAGE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, .credentials.json under [$searched], the macOS keychain and apiKeyHelper. $(Get-SetupHelp)"
     }
 }
 elseif (-not $blocked) {
@@ -478,9 +610,14 @@ elseif (-not $blocked) {
         }
         if ($r.spend -and $r.spend.enabled) {
             $div = [Math]::Pow(10, $r.spend.used.exponent)
+            $lim = [double]$r.spend.limit.amount_minor / $div
             $out.credits = [ordered]@{
                 used     = [double]$r.spend.used.amount_minor / $div
-                limit    = [double]$r.spend.limit.amount_minor / $div
+                # A zero limit is "no monthly cap set", not a cap of nothing.
+                # Emitting 0.0 reads as spend against an exhausted budget and
+                # invites "94.14 of 0.00", so say unlimited explicitly instead.
+                limit    = if ($lim -gt 0) { $lim } else { $null }
+                unlimited = ($lim -le 0)
                 currency = $r.spend.used.currency
             }
         }
@@ -490,8 +627,17 @@ elseif (-not $blocked) {
         $out.limits_error = switch ($status) {
             429 { 'rate limited (429) - treat as unchanged since the last reading and retry later' }
             401 {
-                $when = if ($auth.expires) { " (stored token expired $($auth.expires))" } else { '' }
-                "unauthorized (401)$when from $($auth.source) - run any interactive claude command to refresh it, or re-run 'claude setup-token'"
+                # A pinned token is not refreshed by anything: it is a copied
+                # string, so the only fix is to mint another and reset the
+                # variable. Telling the user to run a claude command would send
+                # them to refresh a credential this reading never touched.
+                if ($auth.source -like 'env:*') {
+                    "unauthorized (401) from $($auth.source) - that token is invalid, revoked, or past its one-year life. Mint a new one and set the variable again: $(Get-SetupHelp)"
+                }
+                else {
+                    $when = if ($auth.expires) { " (stored token expired $($auth.expires))" } else { '' }
+                    "unauthorized (401)$when from $($auth.source) - run any interactive claude command to refresh it, or pin one instead: $(Get-SetupHelp)"
+                }
             }
             403 { "forbidden (403) from $($auth.source) - the token lacks the subscription scope" }
             default { $_.Exception.Message }

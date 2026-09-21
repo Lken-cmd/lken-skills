@@ -25,17 +25,41 @@ outright. If you cannot establish it, omit the parameter and report tokens; the 
 | `-RequireAccountMatch` | fetch no limits at all when the only token belongs to another account. Use it when a wrong number is worse than none — budgeting a long run, say |
 | `-UseStoredToken` | under host-managed auth, read the stored CLI login's subscription anyway, labelled with the account it belongs to. For inspecting *that* account on purpose — it does not recover this session's limits |
 
+## Whose limits, per surface
+
+No setup on any surface. All of them read the same stored login; what differs is how
+well the reading can be tied to the session, which is what `account_mismatch` reports.
+
+| surface | limits | attribution |
+|---|---|---|
+| terminal CLI | yes | verified — `auth_mode: local`, the credentials file *is* this session's login |
+| Claude desktop app | yes | verified — its `cwd` names the account, matched against the stored login |
+| VS Code extension, SDK harness | yes | **`unverified`** — host-managed, names its account nowhere on disk |
+
+Only the terminal CLI writes `.credentials.json` — `/login` and its token refresh. Both GUI
+surfaces authenticate over IPC and keep their own credential elsewhere, which is why neither
+can be read directly and why the file they fall back on is the *CLI's* login, a separate
+lineage from whatever they signed into. An `unverified` reading is therefore right on a
+single-account machine and wrong without warning on a machine with two, so always report the
+account next to the numbers. `-RequireAccountMatch`
+refuses instead of reporting, for when a wrong number is worse than none — an orchestrated
+run budgeting a long phase, say. Setting `CLAUDE_USAGE_OAUTH_TOKEN` from `claude setup-token`
+removes the doubt permanently, but nothing requires it. Never run that command for the user
+and never handle the token value; the script puts the platform-correct form in
+`account_mismatch`, so relay it.
+
 ## Output
 
 | field | meaning |
 |---|---|
 | `limits[]` | one per bucket: `kind` (`session`, `weekly_all`, `weekly_scoped` with its `model`), `percent` used, `resets_at` (local time), `resets_in` (e.g. `2d 4h 12m`) |
-| `credits` | extra-usage spend: `used`, `limit`, `currency`; null when extra usage is disabled |
+| `credits` | extra-usage spend: `used`, `limit`, `currency`, `unlimited`; null when extra usage is disabled. `limit` is null with `unlimited: true` when no monthly cap is set — report the spend alone, never as a fraction of zero |
 | `account` | **whose limits these are**: `email`, `account_uuid`, `organization_uuid` |
 | `session_account` | who the session runs as, from its transcript; null when unstamped |
-| `account_mismatch` | null when the two match. Otherwise why not — a wrong account, or that the check could not be made |
-| `auth_source` | which token the limits half used: `env:CLAUDE_CODE_OAUTH_TOKEN`, a `file:` path, the macOS keychain, or an `apiKeyHelper`. Null when no limits were fetched |
+| `account_mismatch` | null when the two match. Starts `pinned:` when a minted token was used — a note on which subscription is measured, not a warning. Otherwise why the check failed: a wrong account, or that it could not be made |
+| `auth_source` | which token the limits half used: `env:CLAUDE_USAGE_OAUTH_TOKEN` (the pinned one, the intended path), `env:CLAUDE_CODE_OAUTH_TOKEN`, a `file:` path, the macOS keychain, or an `apiKeyHelper`. Null when no limits were fetched |
 | `auth_mode` | `local` when the token came from disk or the environment; `host-managed` when the desktop app or SDK holds it in memory and nothing readable belongs to this session |
+| `credentials_file` | the stored login's path, or null when this machine has none. Null is the one case that is not a malfunction: both GUI surfaces keep their login inside their own process, so a machine driven only through them never writes the file. `limits_error` then opens `NO STORED LOGIN ON THIS MACHINE` — relay that as the reason, and say context is unaffected |
 | `session_context_tokens` | tokens in the session's context: prompt + the last reply |
 | `session_context_percent` | the count over `context_window`; null when the window was not given, or when the count exceeded it |
 | `context_window`, `context_window_source` | the denominator actually used and where it came from (`parameter`, or `unknown` when none was given) — check these before trusting a percentage |
@@ -67,25 +91,38 @@ outright. If you cannot establish it, omit the parameter and report tokens; the 
   credentials file still held a personal Max login, unmodified from hours earlier, and the two
   subscriptions' weekly figures were 56% and 4%. Do not treat "logged in" in one surface as
   evidence about the other.
-- **`auth_mode: host-managed` means this session's limits are not obtainable, and that is the
-  answer.** Such a session — desktop app, or any Agent SDK harness — receives its token from its
-  host over IPC; it exists in no file and no environment variable. The script refuses to substitute
-  the stored login's numbers and sets `limits_error` saying so. Report the limits as unknown rather
-  than hunting for a number: the context half needs no token and is unaffected. Nothing readable can
-  recover them — not the environment, not Credential Manager, not `claude auth status` (a freshly
-  spawned CLI resolves to the on-disk login), not the app's own session state.
-- **Two ways to make the limits readable again**, both requiring a deliberate act by the user:
-  log the CLI in as the account you want measured (`claude auth login`) so `.credentials.json` holds
-  it, then pass `-UseStoredToken` — the label will name that account, so a correct reading is
-  visible as correct; or run `claude setup-token` for it and export `CLAUDE_CODE_OAUTH_TOKEN`, which
-  the script prefers over everything else. The first changes which account *all* CLI sessions use,
-  the second does not. Neither can be done for the user: do not run login or token commands on their
-  behalf, and never handle the token value.
+- **`auth_mode: host-managed` is not by itself a failure.** It means the session's own token lives
+  in its host's memory and arrives over IPC — in no file, no environment variable, no local cache,
+  so it cannot be borrowed. What decides whether limits are still readable is the *account*: a
+  desktop-app session names its own in its cwd
+  (`...\Claude\scratch-workspaces\<accountUuid>\<organizationUuid>\...`), so the stored login can be
+  matched to it and used when they agree. Check `session_account` against `account`; a null
+  `account_mismatch` with both populated means the reading was verified, not merely plausible.
+- **A host-managed session with no account signal reports `unverified`, it does not refuse.** The
+  VS Code extension and SDK harnesses leave nothing to match — not in the transcript, not in
+  `~/.claude/ide/*.lock`, not in `~/.claude/sessions/*.json`. Refusing outright was tried and was
+  an overcorrection: it silently zeroed out the extension the moment Claude Code moved it to
+  host-managed auth, which is how this skill came to report nothing on its most-used surface.
+  Unverifiable is not the same as wrong. Report the numbers *with the account beside them* so a
+  wrong one is visible, and use `-RequireAccountMatch` when a wrong number would be worse than
+  none.
+- **Do not suggest `CLAUDE_CODE_OAUTH_TOKEN` as a machine-wide variable.** It is read here, but it
+  is also an authentication source for Claude Code itself, so setting it persistently moves *every*
+  session onto that token's account. `CLAUDE_USAGE_OAUTH_TOKEN` is read by this script and nothing
+  else, which is the whole reason it exists.
+- **The statusLine route does not exist; do not re-investigate it.** Its payload does carry
+  `rate_limits` and the true context window, but a status line is a terminal footer. Measured
+  2026-09-21 with `refreshInterval: 2`: zero invocations in the VS Code extension across two
+  restarts, zero in the Claude app. The same script registered as a `PostToolUse` hook, same command
+  line, fired immediately — so the command spawner works and the absence is the feature's, not the
+  setup's. Hook input carries no limits data either.
 - `account_mismatch` is not always decidable. Only bridge sessions stamp an owner on their
   transcript, so for most sessions it says *unverifiable* and names the account anyway. Treat that
   as "check this is the right login", not as a pass. A non-null mismatch that names two different
   accounts means the percentages are the wrong subscription's — say so rather than reporting them.
-- `limits_error` says what to do in each case, including which token it declined to use and why.
+- `limits_error` says what to do in each case, including which token it declined to use and why, and
+  carries the platform-correct setup command. Quote it rather than paraphrasing: a shell `export`
+  does not reach a GUI app's environment, so the usual advice is wrong on Windows and on macOS.
   An `ANTHROPIC_API_KEY` cannot stand in — the endpoint is subscription-scoped and a key has no
   subscription. `ANTHROPIC_BASE_URL` indicates a third-party gateway only when it points somewhere
   other than `api.anthropic.com`; the desktop app sets it to the real API for its own sessions, so

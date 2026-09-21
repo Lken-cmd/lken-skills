@@ -23,6 +23,16 @@ prefixed skills come from Matt Pocock's, installed as the `mattpocock-skills` pl
 adjust it if you install them some other way. `orchestrate` writes its own handoff, so it needs no
 handoff skill. `claude-usage` and `cleanup` need PowerShell 7 (`pwsh`).
 
+`claude-usage` needs no setup on any surface. A graphical surface keeps the session's token in its
+host's memory where no script can reach it, so the skill reads the stored login and reports how well
+that reading can be attributed: verified in a terminal (the credentials file *is* that session's
+login) and in the Claude desktop app (its working directory names the account, which the skill
+matches against the stored login), and `unverified` in the VS Code extension, which names its
+account nowhere on disk. An unverified reading always carries the account it belongs to, so a wrong
+one can be spotted; `-RequireAccountMatch` refuses instead of reporting, and
+`CLAUDE_USAGE_OAUTH_TOKEN` from `claude setup-token` removes the doubt for good. Context size is
+reported everywhere regardless.
+
 ## AGENTS.md template
 
 [`templates/AGENTS.template.md`](templates/AGENTS.template.md) is the starting `AGENTS.md` for a new
