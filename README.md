@@ -16,18 +16,25 @@ npx skills add Lken-cmd/lken-skills --skill orchestrate -g
 npx skills update
 ```
 
-`orchestrate` expects `/code-review` and `/claude-usage` to be installed as well; `/handoff` and
-`/grill-with-docs` are referenced but optional. `/code-review`, `/handoff` and `/grill-with-docs` all
-come from Matt Pocock's [mattpocock/skills](https://github.com/mattpocock/skills)
-(`npx skills add mattpocock/skills --skill code-review -g`). `claude-usage` and `cleanup` need
+`orchestrate` invokes `/claude-usage` from this repo and `/mattpocock-skills:code-review`;
+`/mattpocock-skills:handoff` and `/mattpocock-skills:grill-with-docs` are referenced but optional.
+The three prefixed ones come from Matt Pocock's skills, installed as the `mattpocock-skills`
+plugin (`/plugin install mattpocock-skills@claude-plugins-official`) — the prefix is that plugin's,
+so adjust it if you install those skills some other way. `claude-usage` and `cleanup` need
 PowerShell 7 (`pwsh`).
 
 ## AGENTS.md template
 
 [`templates/AGENTS.template.md`](templates/AGENTS.template.md) is the starting `AGENTS.md` for a new
-repository: generic, checkable rules only — architecture, verification, commit messages, repo
-hygiene, dependencies, and what a session leaves behind. Each project fills in the two skeletons
-(what it is, and how it is verified) and grows its own rules into the same file.
+repository: generic, checkable rules only — pointers to where knowledge lives, architecture,
+verification, testing, comments, user-facing text, commits, repo hygiene, dependencies, and what a
+session leaves behind. It holds only rules true for any project, so a house style such as the
+em-dash rule (which `cleanup`'s dash scan needs in order to run at all) is left for each project to
+add. Its architecture bullets are derived from
+`mattpocock-skills:codebase-design` v1.2.3, except "deepen only the code the current change
+touches"; re-derive them when that skill changes. Each project fills in the skeletons (what it is, which documents to
+point at, how it is verified, and any design word that carries a domain sense) and grows its own
+rules into the same file.
 
 ```
 curl -o AGENTS.md https://raw.githubusercontent.com/Lken-cmd/lken-skills/main/templates/AGENTS.template.md
