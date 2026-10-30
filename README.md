@@ -7,6 +7,7 @@ Agent skills for Claude Code and compatible agents, installable with the `skills
 | `orchestrate` | Drives a large, already-designed feature to completion: one fresh subagent per phase, review after each phase or once at the end, a state file committed to an `orchestration-state` branch so a run survives session boundaries. |
 | `claude-usage` | Reports subscription usage limits and the session's context size as JSON, with a percentage when given the context window. |
 | `cleanup` | End-of-session cleanup: merged branches, worktrees, scratch files, dead exclude entries, the memory index, an ADR index, and comment or text findings on the branch. Deletes what is provably obsolete, asks about the rest. |
+| `fewest-parts` | Deletion pass over a branch or a module: read-only subagents question every part against the ask it answers, then deletions are applied, red-checked by the tests and proven by the project's CI commands. |
 
 ## Install
 
@@ -22,6 +23,12 @@ prefixed skills come from Matt Pocock's, installed as the `mattpocock-skills` pl
 (`/plugin install mattpocock-skills@claude-plugins-official`) — the prefix is that plugin's, so
 adjust it if you install them some other way. `orchestrate` writes its own handoff, so it needs no
 handoff skill. `claude-usage` and `cleanup` need PowerShell 7 (`pwsh`).
+
+Run `/fewest-parts` before opening a pull request, and before `/cleanup`, so the parts it deletes
+take their comments with them. It does not start on its own there, since a pass runs subagents and
+the project's CI commands; to have agents run it before every pull request in a project, say so in
+that project's `AGENTS.md`. Its subagents run three at a time to spare the 5-hour limit. Pass
+`--parallel <n>` to change that; without it, a pass with more than three areas asks you first.
 
 `claude-usage` needs no setup on any surface. A graphical surface keeps the session's token in its
 host's memory where no script can reach it, so the skill reads the stored login and reports how well
